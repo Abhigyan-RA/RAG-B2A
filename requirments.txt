@@ -1,0 +1,16 @@
+python-dotenv
+langchain
+langchain-openai
+tavily-python
+beautifulsoup4
+numpy
+pandas 
+langchain-community
+langchain-core
+langchain-groq
+faiss-cpu
+requests
+lxml
+huggingface-hub
+sentence-transformers
+groq
