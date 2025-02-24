@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Google Drive Picker & Open File Example</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+    button { 
+      padding: 10px 20px; 
+      background: #4285f4; 
+      color: white; 
+      border: none; 
+      border-radius: 4px; 
+      cursor: pointer; 
+      margin-right: 10px;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    #result { 
+      margin-top: 20px; 
+      padding: 15px; 
+      border: 1px solid #ddd; 
+      white-space: pre-wrap; 
+    }
+    .error { color: #dc3545; }
+    .file-info {
+      margin: 15px 0;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+    .content-preview {
+      margin-top: 15px;
+      padding: 15px;
+      background: #f8f9fa;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    .loading {
+      display: inline-block;
+      padding: 10px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <button onclick="handleFileAccess()" id="pickButton" disabled>Select File from Google Drive</button>
+  <!-- These buttons will appear after file selection -->
+  <button onclick="openInDrive()" id="openInDriveBtn" style="display: none;">Open in Drive</button>
+  <button onclick="fetchContent()" id="fetchContentBtn" style="display: none;">Fetch Content</button>
+  <div id="result"></div>
+
+  <script>
+    // Replace with your own credentials
+    const CLIENT_ID = '554446428262-lj3u9bfha8fd9bulejn9j92bi20j89jj.apps.googleusercontent.com';
+    const API_KEY = 'AIzaSyCAQKsYtKIl_1v6LZ8jxi3j2_YLqyZcP8Y';
+    const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+    let pickerInitialized = false;
+    let tokenClient;
+    let accessToken = null;
+    let selectedFile = null;
+
+    // Initialize gapi client for Drive API discovery
+    function initializeGapiClient() {
+      return new Promise((resolve, reject) => {
+        gapi.load('client', async () => {
+          try {
+            await gapi.client.init({
+              apiKey: API_KEY,
+              discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+            });
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+    }
+
+    // Initialize the Picker API
+    function initializePicker() {
+      return new Promise((resolve, reject) => {
+        gapi.load('picker', {
+          callback: () => {
+            pickerInitialized = true;
+            console.log('Picker API loaded');
+            resolve();
+          },
+          onerror: reject
+        });
+      });
+    }
+
+    // Initialize Google Identity Services for OAuth2
+    function initializeGIS() {
+      if (!google || !google.accounts) {
+        showError('Google Identity Services not loaded yet');
+        return;
+      }
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPE,
+        callback: (response) => {
+          if (response.error) {
+            showError('Authorization failed: ' + response.error);
+            return;
+          }
+          accessToken = response.access_token;
+          showPicker();
+        },
+      });
+    }
+
+    // Handle file access button click
+    async function handleFileAccess() {
+      if (!pickerInitialized) {
+        showError('Picker not initialized yet. Please try again.');
+        return;
+      }
+      if (!accessToken) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        try {
+          await validateAccessToken();
+          showPicker();
+        } catch (error) {
+          showError('Session expired. Please re-authenticate.');
+          accessToken = null;
+          tokenClient.requestAccessToken({ prompt: 'consent' });
+        }
+      }
+    }
+
+    // Display the Google Picker for file selection
+    function showPicker() {
+      const view = new google.picker.DocsView()
+          .setIncludeFolders(true)
+          .setSelectFolderEnabled(false);
+
+      const picker = new google.picker.PickerBuilder()
+          .addView(view)
+          .setOAuthToken(accessToken)
+          .setDeveloperKey(API_KEY)
+          .setCallback(pickerCallback)
+          .build();
+      picker.setVisible(true);
+    }
+
+    // Picker callback after file selection
+    function pickerCallback(data) {
+      const resultDiv = document.getElementById('result');
+      resultDiv.innerHTML = '';
+      document.getElementById('openInDriveBtn').style.display = 'none';
+      document.getElementById('fetchContentBtn').style.display = 'none';
+
+      if (data.action === google.picker.Action.PICKED && data.docs) {
+        selectedFile = data.docs[0];
+        resultDiv.innerHTML = `
+          <div class="file-info">
+              <strong>Selected File:</strong><br>
+              Name: ${selectedFile.name}<br>
+              Type: ${selectedFile.mimeType}<br>
+              Size: ${selectedFile.sizeBytes ? `${(selectedFile.sizeBytes / 1024).toFixed(2)} KB` : 'Unknown'}<br>
+          </div>
+          <div>Select an action below to open the file and/or fetch its content.</div>
+        `;
+        // Show both buttons: one to open the file and one to fetch content
+        document.getElementById('openInDriveBtn').style.display = 'inline-block';
+        document.getElementById('fetchContentBtn').style.display = 'inline-block';
+      } else if (data.action === google.picker.Action.CANCEL) {
+        resultDiv.textContent = 'User canceled selection';
+        selectedFile = null;
+      }
+    }
+
+    // Opens the file in a new tab using its direct download URL
+    function openInDrive() {
+      if (!selectedFile) {
+        showError('No file selected');
+        return;
+      }
+      const fileUrl = `https://drive.google.com/file/d/${selectedFile.id}/view`;
+      window.open(fileUrl, '_blank');
+    }
+
+    // Fetches file content using the REST API and displays a preview
+    async function fetchContent() {
+      if (!selectedFile) {
+        showError('No file selected');
+        return;
+      }
+      const resultDiv = document.getElementById('result');
+      resultDiv.innerHTML += '<div class="loading">Fetching file content...</div>';
+      try {
+        const content = await fetchFileContent(selectedFile.id);
+        // Display the fetched content preview (first 1000 characters)
+        resultDiv.innerHTML += `
+          <div class="content-preview">
+            <strong>Content Preview:</strong><br>
+            <pre>${escapeHtml(content.substring(0, 1000))}
+            ${content.length > 1000 ? '\n... (truncated)' : ''}</pre>
+          </div>
+        `;
+      } catch (error) {
+        showError(`Failed to fetch file content: ${error.message}`);
+      }
+    }
+
+    // Fetch file content using the REST API
+    async function fetchFileContent(fileId) {
+      try {
+        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error?.message || 'Failed to fetch file');
+        }
+        return await response.text();
+      } catch (error) {
+        console.error('Error fetching file:', error);
+        throw error;
+      }
+    }
+
+    // Validate access token (using tokeninfo endpoint)
+    async function validateAccessToken() {
+      try {
+        const response = await fetch(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${accessToken}`);
+        if (!response.ok) {
+          throw new Error('Invalid access token');
+        }
+        const data = await response.json();
+        console.log('Token info:', data);
+      } catch (error) {
+        console.error('Token validation error:', error);
+        throw error;
+      }
+    }
+
+    // Escape HTML for safe output
+    function escapeHtml(unsafe) {
+      return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    // Display error messages in the result area
+    function showError(message) {
+      const resultDiv = document.getElementById('result');
+      resultDiv.innerHTML = `<div class="error">Error: ${message}</div>`;
+      console.error(message);
+    }
+
+    // Load Google APIs (GIS and gapi) in sequence
+    function loadGoogleAPIs() {
+      return new Promise((resolve, reject) => {
+        const gsiScript = document.createElement('script');
+        gsiScript.src = 'https://accounts.google.com/gsi/client';
+        gsiScript.onload = () => {
+          const gapiScript = document.createElement('script');
+          gapiScript.src = 'https://apis.google.com/js/api.js';
+          gapiScript.onload = async () => {
+            try {
+              await initializeGapiClient();
+              await initializePicker();
+              initializeGIS();
+              document.getElementById('pickButton').disabled = false;
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          };
+          gapiScript.onerror = reject;
+          document.head.appendChild(gapiScript);
+        };
+        gsiScript.onerror = reject;
+        document.head.appendChild(gsiScript);
+      });
+    }
+
+    window.onload = function() {
+      loadGoogleAPIs().catch(error => {
+        showError(`Failed to initialize Google APIs: ${error.message}`);
+      });
+    };
+  </script>
+</body>
+</html>
